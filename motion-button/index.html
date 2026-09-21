@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Buttons with a Brain: Motion &amp; State Micro-interactions</title>
+<style>
+  :root {
+    --ink: #14202b;
+    --muted: #4a5a68;
+    --paper: #eef1f4;
+    --panel: #ffffff;
+    --line: #cfd8e0;
+
+    /* Button palette (white text passes AA on all three) */
+    --brand: #0b5563;
+    --success: #1a6b3a;
+    --error: #a4262c;
+    --ring: #1d6fe0;
+
+    /* Motion tokens: each one is used on purpose, see README */
+    --dur-press: 120ms;   /* direct feedback: must feel instant */
+    --dur-hover: 180ms;   /* light, reversible */
+    --dur-swap: 320ms;    /* label swaps: long enough to read as motion */
+    --dur-color: 260ms;   /* colour crossfade */
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);        /* things arriving */
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);     /* things swapping places */
+    --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);     /* small overshoot for success */
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--paper);
+    color: var(--ink);
+    font: 400 1rem/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid;
+    place-items: center;
+    padding: 2rem 1rem;
+  }
+  main { width: 100%; max-width: 40rem; }
+  h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .5rem; letter-spacing: -0.01em; }
+  p.lede { margin: 0 0 2rem; color: var(--muted); max-width: 60ch; }
+
+  .stage {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 2rem 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem 2rem;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .controls {
+    margin-top: 1.5rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 1.25rem 1.5rem;
+  }
+  fieldset { border: 0; margin: 0; padding: 0; }
+  legend { font-weight: 650; padding: 0; margin-bottom: .5rem; }
+  .options { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; }
+  .options label { display: inline-flex; gap: .45rem; align-items: center; cursor: pointer; }
+  .options input { width: 1.1rem; height: 1.1rem; accent-color: var(--brand); }
+  .options input:focus-visible { outline: 3px solid var(--ring); outline-offset: 2px; }
+  .controls .row + .row { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+  .hint { color: var(--muted); font-size: .9rem; margin: .5rem 0 0; }
+
+  /* ------------------------------------------------------------------
+     Motion button
+     State lives in one attribute: data-state on the <button>.
+     idle -> loading -> success -> idle
+                     -> error   -> (click to retry) -> loading
+     Every visual change is a CSS transition on transform/opacity, so the
+     browser can interrupt and reverse it mid-flight with no JS timing code.
+     ------------------------------------------------------------------ */
+  .mb-wrap {
+    position: relative;
+    display: inline-block;
+    border-radius: 999px;
+    --brand-local: var(--brand);
+  }
+  .mb-wrap.alt { --brand-local: #3b3a8f; }
+
+  /* Focus ring lives on the wrapper, drawn with opacity + scale (compositor-only) */
+  .mb-wrap::after {
+    content: "";
+    position: absolute;
+    inset: -5px;
+    border: 3px solid var(--ring);
+    border-radius: 999px;
+    opacity: 0;
+    transform: scale(0.94);
+    transition: opacity var(--dur-hover) var(--ease-out), transform var(--dur-hover) var(--ease-out);
+    pointer-events: none;
+  }
+  .mb-wrap:has(.mb:focus-visible)::after { opacity: 1; transform: scale(1); }
+
+  .mb {
+    position: relative;
+    display: block;
+    width: 12.5rem;      /* fixed width: no layout change during any transition */
+    height: 3.25rem;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    overflow: hidden;
+    isolation: isolate;
+    background: var(--brand-local);
+    color: #fff;
+    font: 650 1rem/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform var(--dur-hover) var(--ease-out);
+  }
+  .mb:focus { outline: none; }   /* replaced by the ring above, only shown for keyboard users */
+
+  /* Colour crossfade layers: opacity instead of animating background-color */
+  .mb .bg { position: absolute; inset: 0; opacity: 0; z-index: -1; transition: opacity var(--dur-color) var(--ease-in-out); }
+  .mb .bg-success { background: var(--success); }
+  .mb .bg-error { background: var(--error); }
+  .mb[data-state="success"] .bg-success { opacity: 1; }
+  .mb[data-state="error"] .bg-error { opacity: 1; }
+
+  /* Hover sheen */
+  .mb .sheen { position: absolute; inset: 0; background: #fff; opacity: 0; z-index: -1; transition: opacity var(--dur-hover) var(--ease-out); }
+
+  /* Hover / focus / press. Only when the button can actually be pressed */
+  .mb:not([aria-disabled="true"]):not(:disabled):hover { transform: translateY(-2px); }
+  .mb:not([aria-disabled="true"]):not(:disabled):hover .sheen { opacity: 0.14; }
+  .mb:not([aria-disabled="true"]):not(:disabled):active { transform: translateY(0) scale(0.97); transition-duration: var(--dur-press); }
+  .mb:not([aria-disabled="true"]):not(:disabled):active .sheen { opacity: 0.22; }
+
+  /* Loading: no hover lift, wait cursor */
+  .mb[aria-disabled="true"] { cursor: progress; }
+  .mb[data-state="success"][aria-disabled="true"] { cursor: default; }
+
+  /* Disabled (bonus state) */
+  .mb:disabled { cursor: not-allowed; opacity: 0.45; }
+  .mb { transition: transform var(--dur-hover) var(--ease-out), opacity var(--dur-color) var(--ease-in-out); }
+
+  /* Layers: every label is always in the DOM, we only move them */
+  .layer {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: .55rem;
+    white-space: nowrap;
+    opacity: 0;
+    transform: translateY(100%);
+    transition:
+      transform var(--dur-swap) var(--ease-in-out),
+      opacity calc(var(--dur-swap) * 0.8) var(--ease-in-out);
+  }
+  .layer svg { width: 1.15rem; height: 1.15rem; flex: none; }
+
+  /* Idle: idle label in, everything else waiting below */
+  .mb[data-state="idle"] .l-idle { opacity: 1; transform: none; }
+
+  /* Loading: idle exits up, loading enters from below */
+  .mb[data-state="loading"] .l-idle { transform: translateY(-100%); }
+  .mb[data-state="loading"] .l-loading { opacity: 1; transform: none; }
+
+  /* Success and error: earlier layers exit up, result enters from below */
+  .mb[data-state="success"] .l-idle,
+  .mb[data-state="success"] .l-loading,
+  .mb[data-state="error"] .l-idle,
+  .mb[data-state="error"] .l-loading { transform: translateY(-100%); }
+  .mb[data-state="success"] .l-success { opacity: 1; transform: none; }
+  .mb[data-state="error"] .l-success { transform: translateY(-100%); }
+  .mb[data-state="error"] .l-error { opacity: 1; transform: none; }
+
+  /* Spinner: transform rotation is compositor-only */
+  .spinner { animation: spin 800ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Success check pops in with a small overshoot, after the label has arrived */
+  .l-success svg { transform: scale(0.3); transition: transform 380ms var(--ease-pop) 120ms; }
+  .mb[data-state="success"] .l-success svg { transform: scale(1); }
+
+  /* Error: one horizontal shake on the wrapper (transform only) */
+  .mb-wrap:has(.mb[data-state="error"]) { animation: shake 420ms var(--ease-in-out) 1; }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-7px); }
+    40% { transform: translateX(6px); }
+    60% { transform: translateX(-4px); }
+    80% { transform: translateX(2px); }
+  }
+
+  /* Reduced motion: keep every piece of feedback, remove movement.
+     Layers crossfade in place, the spinner stops spinning (the words
+     "Sending…" carry the meaning), and the error shake is skipped
+     (the red colour and Retry label remain). */
+  @media (prefers-reduced-motion: reduce) {
+    .layer { transform: none !important; transition: opacity 120ms linear; }
+    .spinner { animation: none; }
+    .l-success svg { transform: none !important; transition: none; }
+    .mb-wrap:has(.mb[data-state="error"]) { animation: none; }
+    .mb, .mb-wrap::after { transition: opacity 120ms linear; }
+    .mb:not([aria-disabled="true"]):not(:disabled):hover,
+    .mb:not([aria-disabled="true"]):not(:disabled):active { transform: none; }
+    .mb-wrap::after { transform: none; }
+  }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Buttons with a Brain</h1>
+  <p class="lede">A button that tells you what is happening. Click one, hover it, tab to it, or spam it. Use the controls below to force a success or an error on demand.</p>
+
+  <section class="stage" aria-label="Demo buttons">
+    <span class="mb-wrap">
+      <button type="button" class="mb" data-motion-button data-state="idle"
+              data-idle="Send message" data-loading="Sending…" data-success="Sent" data-error="Failed. Retry"
+              data-announce-loading="Sending message" data-announce-success="Message sent" data-announce-error="Sending failed. Press to retry.">
+      </button>
+    </span>
+
+    <span class="mb-wrap alt">
+      <button type="button" class="mb" data-motion-button data-state="idle"
+              data-idle="Save draft" data-loading="Saving…" data-success="Saved" data-error="Failed. Retry"
+              data-announce-loading="Saving draft" data-announce-success="Draft saved" data-announce-error="Saving failed. Press to retry.">
+      </button>
+    </span>
+  </section>
+
+  <section class="controls" aria-label="Demo controls">
+    <div class="row">
+      <fieldset>
+        <legend>What should the next click do?</legend>
+        <div class="options">
+          <label><input type="radio" name="mode" value="random" checked> Random (20% fail)</label>
+          <label><input type="radio" name="mode" value="success"> Always succeed</label>
+          <label><input type="radio" name="mode" value="error"> Always fail</label>
+        </div>
+        <p class="hint">Pick "Always fail", click a button to see the error state, then switch to "Always succeed" and click again to retry.</p>
+      </fieldset>
+    </div>
+    <div class="row">
+      <div class="options">
+        <label><input type="checkbox" id="disable-toggle"> Disable both buttons</label>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const SVG = {
+    send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg>',
+    spinner: '<svg class="spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" opacity=".3"/><path d="M21 12a9 9 0 0 0-9-9"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5 10 17.5 19 7"/></svg>',
+    retry: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>'
+  };
+
+  const SUCCESS_HOLD_MS = 1600;   // how long the success message stays before returning to idle
+  const getMode = () => document.querySelector('input[name="mode"]:checked').value;
+
+  // Fake async call: random 700-1600ms delay, outcome depends on the demo mode
+  function fakeRequest() {
+    const delay = 700 + Math.random() * 900;
+    const mode = getMode();
+    const fails = mode === 'error' || (mode === 'random' && Math.random() < 0.2);
+    return new Promise((resolve, reject) => setTimeout(() => (fails ? reject(new Error('fail')) : resolve()), delay));
+  }
+
+  function initMotionButton(btn) {
+    const d = btn.dataset;
+    btn.innerHTML =
+      '<span class="bg bg-success"></span><span class="bg bg-error"></span><span class="sheen"></span>' +
+      `<span class="layer l-idle">${SVG.send}<span>${d.idle}</span></span>` +
+      `<span class="layer l-loading">${SVG.spinner}<span>${d.loading}</span></span>` +
+      `<span class="layer l-success">${SVG.check}<span>${d.success}</span></span>` +
+      `<span class="layer l-error">${SVG.retry}<span>${d.error}</span></span>`;
+
+    // Separate live region so screen readers hear each state change once
+    const live = document.createElement('span');
+    live.className = 'sr-only';
+    live.setAttribute('role', 'status');
+    live.setAttribute('aria-live', 'polite');
+    btn.parentElement.appendChild(live);
+
+    // Hide the inactive layers from assistive tech; the live region announces instead
+    btn.querySelectorAll('.layer').forEach(l => l.setAttribute('aria-hidden', 'true'));
+    btn.setAttribute('aria-label', d.idle);
+
+    let resetTimer = null;
+    let runId = 0;   // guards against stale results if a new run starts
+
+    const setState = (state) => {
+      btn.dataset.state = state;
+      btn.setAttribute('aria-disabled', state === 'loading' || state === 'success' ? 'true' : 'false');
+      btn.setAttribute('aria-label', state === 'idle' ? d.idle : state === 'error' ? d.error : d[state]);
+      if (state !== 'idle') live.textContent = d['announce' + state[0].toUpperCase() + state.slice(1)];
+    };
+
+    btn.addEventListener('click', async () => {
+      // Interruptible + spam-safe: clicks while busy are ignored, nothing restarts or stacks
+      if (btn.getAttribute('aria-disabled') === 'true') return;
+
+      clearTimeout(resetTimer);
+      const myRun = ++runId;
+      setState('loading');
+
+      try {
+        await fakeRequest();
+        if (myRun !== runId) return;
+        setState('success');
+        resetTimer = setTimeout(() => { if (myRun === runId) setState('idle'); }, SUCCESS_HOLD_MS);
+      } catch {
+        if (myRun !== runId) return;
+        setState('error');   // stays in error until the user retries
+      }
+    });
+
+    setState('idle');
+    live.textContent = '';
+  }
+
+  const buttons = [...document.querySelectorAll('[data-motion-button]')];
+  buttons.forEach(initMotionButton);
+
+  document.getElementById('disable-toggle').addEventListener('change', (e) => {
+    buttons.forEach(b => { b.disabled = e.target.checked; });
+  });
+})();
+</script>
+</body>
+</html>
