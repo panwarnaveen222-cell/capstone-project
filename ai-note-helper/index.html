@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Action Item Extractor</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #0d1117; color: #e8edf1; font: 400 1rem/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 40rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .4rem; letter-spacing: -0.01em; }
+  p.lede { color: #9fb0bd; margin: 0 0 1.75rem; max-width: 52ch; }
+
+  label { display: block; font-size: .85rem; color: #9fb0bd; margin-bottom: .4rem; }
+  textarea {
+    width: 100%;
+    min-height: 9rem;
+    resize: vertical;
+    background: #10161d;
+    border: 1px solid #2a3644;
+    border-radius: .6rem;
+    color: #e8edf1;
+    font: inherit;
+    padding: .8rem .9rem;
+  }
+  textarea:focus-visible { outline: 3px solid #7db4ff; outline-offset: 1px; }
+
+  .row { display: flex; align-items: center; justify-content: space-between; margin-top: .5rem; }
+  .count { font-size: .78rem; color: #7f8fa0; font-variant-numeric: tabular-nums; }
+  .count.over { color: #e2857a; }
+
+  button.submit {
+    margin-top: 1rem;
+    background: #3b6ea5;
+    color: #fff;
+    border: 0;
+    padding: .65rem 1.3rem;
+    border-radius: .55rem;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.submit:disabled { opacity: .55; cursor: not-allowed; }
+  button.submit:focus-visible { outline: 3px solid #7db4ff; outline-offset: 2px; }
+
+  .status { margin-top: 1rem; font-size: .9rem; color: #9fb0bd; min-height: 1.3rem; }
+  .status.error { color: #e2857a; }
+
+  ul.items { list-style: none; padding: 0; margin: 1.25rem 0 0; display: flex; flex-direction: column; gap: .6rem; }
+  ul.items li {
+    background: #10161d;
+    border: 1px solid #202a35;
+    border-radius: .6rem;
+    padding: .8rem .95rem;
+  }
+  .task { font-weight: 600; }
+  .meta { font-size: .82rem; color: #8fa0ae; margin-top: .3rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+  .meta span b { color: #c3cdd6; font-weight: 600; }
+
+  .sample {
+    background: none; border: 0; color: #7db4ff; font: inherit; font-size: .85rem;
+    cursor: pointer; padding: 0; text-decoration: underline; margin-top: .4rem;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Action Item Extractor</h1>
+  <p class="lede">Paste messy meeting notes. Claude pulls out the action items with a best guess at owner and deadline, returned as structured data — not a chat reply.</p>
+
+  <label for="notes">Notes</label>
+  <textarea id="notes" maxlength="4000" placeholder="e.g. Priya will send the deck by Friday. We still need someone to follow up with the vendor next week. John, can you check the budget before the next sync?"></textarea>
+  <div class="row">
+    <button type="button" class="sample" id="fill-sample">Use a sample</button>
+    <span class="count" id="count">0 / 4000</span>
+  </div>
+
+  <button type="button" class="submit" id="submit">Extract action items</button>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+
+  <ul class="items" id="items"></ul>
+</main>
+
+<script>
+const notesEl = document.getElementById('notes');
+const countEl = document.getElementById('count');
+const submitEl = document.getElementById('submit');
+const statusEl = document.getElementById('status');
+const itemsEl = document.getElementById('items');
+
+const SAMPLE = `Standup notes, Tuesday:
+- Priya will send the updated deck by Friday.
+- Still need someone to follow up with the vendor about the invoice, ideally early next week.
+- John: can you double check the Q3 budget numbers before Thursday's sync?
+- Nothing urgent from design this week.`;
+
+document.getElementById('fill-sample').addEventListener('click', () => {
+  notesEl.value = SAMPLE;
+  updateCount();
+  notesEl.focus();
+});
+
+function updateCount() {
+  const len = notesEl.value.length;
+  countEl.textContent = `${len} / 4000`;
+  countEl.classList.toggle('over', len > 4000);
+}
+notesEl.addEventListener('input', updateCount);
+updateCount();
+
+submitEl.addEventListener('click', async () => {
+  const notes = notesEl.value.trim();
+  if (!notes) {
+    statusEl.textContent = 'Add some notes first.';
+    statusEl.classList.add('error');
+    return;
+  }
+
+  submitEl.disabled = true;
+  statusEl.classList.remove('error');
+  statusEl.textContent = 'Extracting…';
+  itemsEl.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/extract', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ notes }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      statusEl.textContent = data.error || `Request failed (${res.status}).`;
+      statusEl.classList.add('error');
+      return;
+    }
+
+    if (data.parseFailed) {
+      statusEl.textContent = "The AI's reply wasn't valid structured data, so here's the raw text instead:";
+      statusEl.classList.add('error');
+      const li = document.createElement('li');
+      li.textContent = data.raw;
+      itemsEl.appendChild(li);
+      return;
+    }
+
+    if (data.items.length === 0) {
+      statusEl.textContent = 'No action items found in that text.';
+      return;
+    }
+
+    statusEl.textContent = `Found ${data.items.length} action item${data.items.length === 1 ? '' : 's'}.`;
+    data.items.forEach((item) => {
+      const li = document.createElement('li');
+      const meta = [];
+      if (item.owner) meta.push(`<span><b>Owner:</b> ${escapeHtml(item.owner)}</span>`);
+      if (item.deadline) meta.push(`<span><b>Deadline:</b> ${escapeHtml(item.deadline)}</span>`);
+      li.innerHTML = `<div class="task">${escapeHtml(item.task)}</div>` + (meta.length ? `<div class="meta">${meta.join('')}</div>` : '');
+      itemsEl.appendChild(li);
+    });
+  } catch (err) {
+    statusEl.textContent = 'Network error. Check your connection and try again.';
+    statusEl.classList.add('error');
+  } finally {
+    submitEl.disabled = false;
+  }
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+</script>
+</body>
+</html>
