@@ -19,20 +19,20 @@ npm i -g vercel
 vercel login
 vercel dev
 ```
-Then open `http://localhost:3000`. You'll need an `ANTHROPIC_API_KEY` in a local `.env` file (see below) before the Extract button will work — the static page itself loads without one.
+Then open `http://localhost:3000`. You'll need a `GROQ_API_KEY` in a local `.env` file (see below) before the Extract button will work — the static page itself loads without one.
 
 ## Environment variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | Your Claude API key from console.anthropic.com. Never committed — set it in Vercel's dashboard or a local `.env` file (already in `.gitignore`). |
-| `ANTHROPIC_MODEL` | No | Overrides the model used. Defaults to `claude-3-5-haiku-20241022`. |
+| `GROQ_API_KEY` | Yes | Your API key from console.groq.com (free tier, no card required). Never committed — set it in Vercel's dashboard or a local `.env` file (already in `.gitignore`). |
+| `GROQ_MODEL` | No | Overrides the model used. Defaults to `llama-3.3-70b-versatile`. |
 
 ## Deploying to Vercel (production)
 1. Push this repo to GitHub (already done as part of this capstone).
 2. In the Vercel dashboard, **Add New Project** → import this GitHub repo.
 3. Set **Root Directory** to `ai-note-helper`, since this repo also holds three other, unrelated static demos.
-4. Add the `ANTHROPIC_API_KEY` environment variable under **Settings → Environment Variables**, scoped to Production (and Preview, if you want PR previews to work too).
+4. Add the `GROQ_API_KEY` environment variable under **Settings → Environment Variables**, scoped to Production (and Preview, if you want PR previews to work too).
 5. Deploy. Vercel auto-detects the `api/` folder as serverless functions and serves `index.html` as the static entry point.
 6. To promote a specific deploy to production later, use **Deployments → \[pick one\] → Promote to Production**, or push to the connected branch.
 
@@ -45,17 +45,17 @@ ai-note-helper/
 │                      calls the Claude API, parses the structured response, returns JSON.
 └── vercel.json        Sets maxDuration on the function.
 ```
-The frontend never talks to the Claude API directly — `ANTHROPIC_API_KEY` only exists server-side, inside the serverless function's environment. This is the reason the route exists at all, rather than calling the API straight from the browser.
+The frontend never talks to the AI API directly — `GROQ_API_KEY` only exists server-side, inside the serverless function's environment. This is the reason the route exists at all, rather than calling the API straight from the browser.
 
 ## AI integration: how and why
-- **What:** structured extraction (JSON in, JSON out), not a chatbot. The system prompt explicitly forbids prose or markdown fences, so the output is always parseable data the UI can render as cards.
+- **What:** structured extraction (JSON in, JSON out), not a chatbot. The system prompt explicitly forbids prose outside the JSON object, and Groq's `response_format: {type: "json_object"}` mode enforces valid JSON at the API level, so the output is reliably parseable data the UI can render as cards.
 - **Why this and not a chat box:** the brief asks for AI that solves something, not a gimmick. A generic "ask me anything" box wasn't the goal; turning unstructured notes into a list a reviewer can act on is.
-- **Model:** `claude-3-5-haiku-20241022` by default — fast and inexpensive for a small extraction task like this; swappable via `ANTHROPIC_MODEL`.
+- **Provider and model:** originally built against the Claude API, then switched to **Groq** (`llama-3.3-70b-versatile` by default, swappable via `GROQ_MODEL`) because my Anthropic account required paid credits to make any live calls, and I wanted a genuinely free, testable deployment for this submission. Groq's free tier needs no card and the API is OpenAI-compatible, so the swap only touched the request/response shape in `api/extract.js` — the rate limiting, input cap, and frontend were untouched. The brief allows "Claude API, LLM integration, or similar," and Groq (serving open Llama models) fits that.
 
 ## Production hygiene (abuse protection)
 - **Input cap:** 4,000 characters, rejected with a 413 before the request reaches Claude.
 - **Rate limiting:** a per-IP in-memory counter allows 5 requests per rolling 60-second window, returning 429 past that.
-- **Cost ceiling:** `max_tokens: 600` on every API call, so a single request has a hard upper bound on cost regardless of input size.
+- **Cost ceiling:** `max_tokens: 600` on every API call, so a single request has a hard upper bound on token usage regardless of input size.
 - **`maxDuration`:** capped at 15 seconds in `vercel.json`.
 - **Known limitation, stated honestly:** the rate limiter is an in-memory `Map` inside the function, which resets whenever the serverless instance goes cold and isn't shared across multiple warm instances under real concurrent traffic. It stops a casual abuser clicking the button repeatedly, but it is **not** a substitute for a real distributed limiter. With more time, this would move to Vercel KV or Upstash Redis, keyed by IP, so the count is shared across all instances.
 
@@ -71,7 +71,7 @@ Tested manually on:
 ## Decisions
 - **No framework:** a single static HTML file plus one serverless function is the smallest thing that satisfies the brief; React/Next.js would add a build step with no real benefit at this size.
 - **In-memory rate limiting over a paid add-on:** honest trade-off for a portfolio project's cost and time budget — documented above rather than hidden.
-- **Haiku over a larger model:** the task (short extraction) doesn't need a bigger model, and it keeps the per-request cost low if the public URL gets traffic.
+- **Groq over a paid API:** the task (short extraction) doesn't need a large proprietary model, and Groq's free tier keeps this deployment genuinely runnable end-to-end without payment — documented as a real constraint I worked within, not hidden.
 
 ## What I'd add with more time
 - A shared, persistent rate limiter (Vercel KV/Upstash) instead of the in-memory one.
@@ -81,6 +81,8 @@ Tested manually on:
 ## How AI tools built this
 Built with Cursor (AI-assisted editor) as the coding partner throughout this internship track. Specifics, not a generic "AI helped":
 - Cursor's chat scaffolded the initial shape of the serverless function (the request-validation → rate-limit → API-call → parse pipeline) from a description of the requirements; I then read through it, changed the rate-limit window and the character cap to match this project's actual needs, and rewrote the error messages to be specific rather than generic.
-- The system prompt sent to Claude (in `api/extract.js`) was iterated by hand: an early version allowed markdown code fences in the reply, which broke `JSON.parse`; I added the explicit "no markdown fences" instruction after seeing that fail locally.
+- The first version called the Claude API. In production it returned HTTP 400 for every request; the Vercel runtime logs showed this was because my Anthropic account had no billing credit. I switched the backend to Groq's free API instead — an OpenAI-compatible endpoint — which only meant changing the request body shape (`messages` format, `response_format: {type:"json_object"}`) and the response parsing path (`data.choices[0].message.content` instead of `data.content[0].text`). The rate limiting, input cap, and frontend needed no changes.
+- The system prompt was iterated by hand: an early version allowed the model to wrap its reply in markdown code fences, which broke `JSON.parse`; after switching to Groq I also had to change the schema from a bare JSON array to `{"items": [...]}`, since Groq's `json_object` response format requires a top-level object, not an array.
 - The frontend's escape-HTML helper and the defensive `parseFailed` fallback path were added after asking Cursor "what happens if the model doesn't return valid JSON" and building the fallback UI myself.
-- I did not commit an `ANTHROPIC_API_KEY` at any point; this was checked against `.gitignore` before every push.
+- **A real mistake and fix, stated honestly:** while generating a new Claude API key, I accidentally shared a screenshot of the full key in a chat conversation before it was ever used anywhere. I revoked it immediately in the Anthropic console and never used it — the incident is noted here because it's a genuine lesson in this project about *why* API keys belong only in environment variables and never in any client, chat, or committed file.
+- No API key is committed anywhere in this repo at any point; `.env`, `.env.local`, and `.vercel` are all in `.gitignore`, checked before every push.
