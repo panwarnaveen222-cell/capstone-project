@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your First 3D Experience — Lamp Configurator</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: #0d1117;
+    color: #e8edf1;
+    font: 400 1rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: 1fr;
+    min-height: 100svh;
+  }
+  @media (min-width: 56rem) {
+    .app { grid-template-columns: 1fr 19rem; }
+  }
+
+  .stage {
+    position: relative;
+    min-height: 26rem;
+    background: radial-gradient(120% 90% at 50% 20%, #1a2330, #0d1117 65%);
+    overflow: hidden;
+  }
+  .stage canvas { position: absolute; inset: 0; display: block; touch-action: none; }
+
+  /* Shown until the scene has actually started rendering, and permanently
+     shown instead of the canvas when reduced motion is on. */
+  .fallback {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .75rem;
+    text-align: center;
+    padding: 1.5rem;
+    background:
+      radial-gradient(60% 55% at 50% 40%, #2a3b4d 0%, transparent 70%),
+      linear-gradient(180deg, #10161d, #0d1117);
+  }
+  .fallback .ring {
+    width: 6.5rem; height: 6.5rem;
+    border-radius: 50%;
+    background: conic-gradient(from 200deg, #d9a441, #b3672c, #d9a441);
+    box-shadow: 0 0 3rem 0.25rem rgba(217, 164, 65, .25);
+  }
+  .fallback p { max-width: 28ch; color: #a9b6c1; margin: 0; font-size: .92rem; }
+  button.enable3d {
+    margin-top: .25rem;
+    background: #3b6ea5;
+    color: #fff;
+    border: 0;
+    padding: .55rem 1.1rem;
+    border-radius: .5rem;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.enable3d:focus-visible { outline: 3px solid #7db4ff; outline-offset: 2px; }
+
+  .hint {
+    position: absolute;
+    left: 1rem; bottom: 1rem;
+    font-size: .78rem;
+    color: #9fb0bd;
+    background: rgba(10,14,19,.55);
+    padding: .35rem .6rem;
+    border-radius: .4rem;
+    backdrop-filter: blur(6px);
+  }
+  .perf {
+    position: absolute;
+    right: 1rem; top: 1rem;
+    font-size: .74rem;
+    color: #9fb0bd;
+    background: rgba(10,14,19,.55);
+    padding: .3rem .55rem;
+    border-radius: .4rem;
+    backdrop-filter: blur(6px);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .panel {
+    padding: 1.5rem 1.25rem;
+    border-top: 1px solid #202a35;
+    background: #10161d;
+  }
+  @media (min-width: 56rem) { .panel { border-top: 0; border-left: 1px solid #202a35; } }
+  .panel h1 { font-size: 1.15rem; margin: 0 0 .25rem; }
+  .panel p.lede { color: #9fb0bd; font-size: .88rem; margin: 0 0 1.25rem; }
+
+  .group { margin-bottom: 1.25rem; }
+  .group h2 { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: #7f8fa0; margin: 0 0 .55rem; }
+
+  .swatches { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .swatch {
+    width: 2.1rem; height: 2.1rem;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+  .swatch[aria-pressed="true"] { border-color: #e8edf1; }
+  .swatch:focus-visible { outline: 3px solid #7db4ff; outline-offset: 2px; }
+
+  .options { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .opt-btn {
+    background: #1a222c;
+    color: #e8edf1;
+    border: 1px solid #2a3644;
+    padding: .4rem .75rem;
+    border-radius: .5rem;
+    font: inherit;
+    font-size: .85rem;
+    cursor: pointer;
+  }
+  .opt-btn[aria-pressed="true"] { background: #3b6ea5; border-color: #3b6ea5; }
+  .opt-btn:focus-visible { outline: 3px solid #7db4ff; outline-offset: 2px; }
+
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .toggle-row label { font-size: .9rem; }
+  input[type="checkbox"] { width: 1.15rem; height: 1.15rem; accent-color: #3b6ea5; }
+
+  .note {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid #202a35;
+    font-size: .8rem;
+    color: #7f8fa0;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="stage" id="stage">
+    <div class="fallback" id="fallback">
+      <div class="ring" aria-hidden="true"></div>
+      <p id="fallback-text">Loading the 3D scene…</p>
+    </div>
+    <p class="hint" id="hint" hidden>Drag to orbit · scroll/pinch to zoom</p>
+    <p class="perf" id="perf" hidden></p>
+  </div>
+
+  <aside class="panel">
+    <h1>Lamp configurator</h1>
+    <p class="lede">A small procedurally-built product — no model file to download, every shape is generated at runtime.</p>
+
+    <div class="group">
+      <h2>Shade colour</h2>
+      <div class="swatches" id="colors" role="group" aria-label="Shade colour"></div>
+    </div>
+
+    <div class="group">
+      <h2>Shade shape</h2>
+      <div class="options" id="shapes" role="group" aria-label="Shade shape"></div>
+    </div>
+
+    <div class="group">
+      <h2>Finish</h2>
+      <div class="toggle-row">
+        <label for="metal-toggle">Metallic base</label>
+        <input type="checkbox" id="metal-toggle" checked>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>Display</h2>
+      <div class="toggle-row" style="margin-bottom:.6rem;">
+        <label for="rotate-toggle">Auto-rotate</label>
+        <input type="checkbox" id="rotate-toggle" checked>
+      </div>
+      <div class="toggle-row">
+        <label for="wire-toggle">Wireframe</label>
+        <input type="checkbox" id="wire-toggle">
+      </div>
+    </div>
+
+    <p class="note">Move your mouse or drag on mobile to orbit. The scene pauses automatically when the tab is hidden or when reduced motion is requested.</p>
+  </aside>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+const stage = document.getElementById('stage');
+const fallback = document.getElementById('fallback');
+const fallbackText = document.getElementById('fallback-text');
+const hint = document.getElementById('hint');
+const perfEl = document.getElementById('perf');
+
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// --- Reduced motion: never auto-start the scene. Show a static message
+//     and an explicit opt-in button instead, per the assignment's fallback
+//     requirement. -------------------------------------------------------
+if (reducedMotion) {
+  fallbackText.textContent = 'Motion is reduced on this device.';
+  const btn = document.createElement('button');
+  btn.className = 'enable3d';
+  btn.textContent = 'Enable the 3D scene anyway';
+  fallback.appendChild(btn);
+  btn.addEventListener('click', () => startScene(), { once: true });
+} else {
+  // --- Lazy load: don't touch WebGL until the stage has actually
+  //     scrolled into view. On this page it's visible immediately, so in
+  //     practice this fires on the first idle callback after paint, but
+  //     the same IntersectionObserver protects a page where the stage
+  //     sits further down. ------------------------------------------------
+  const io = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting) {
+      io.disconnect();
+      (window.requestIdleCallback || ((fn) => setTimeout(fn, 1)))(startScene);
+    }
+  }, { threshold: 0.1 });
+  io.observe(stage);
+}
+
+function startScene() {
+  fallback.remove();
+  hint.hidden = false;
+  perfEl.hidden = false;
+
+  // --- Renderer: capped pixel ratio keeps this sane on phones/high-DPI
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setClearColor(0x0d1117);
+  stage.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 50);
+  camera.position.set(2.6, 1.9, 3.2);
+
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 2.2;
+  controls.maxDistance = 6;
+  controls.maxPolarAngle = Math.PI * 0.52;
+  controls.target.set(0, 0.6, 0);
+
+  // --- Lighting: one key light with soft shadows, one fill, one rim ---
+  const key = new THREE.DirectionalLight(0xfff2e0, 1.6);
+  key.position.set(3, 4, 2);
+  key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.camera.near = 1;
+  key.shadow.camera.far = 12;
+  scene.add(key);
+  scene.add(new THREE.AmbientLight(0x3a4756, 1.1));
+  const rim = new THREE.PointLight(0x6ea8ff, 0.6, 8);
+  rim.position.set(-2, 2, -2);
+  scene.add(rim);
+
+  // --- Ground: catches the lamp's shadow ---
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(3, 48),
+    new THREE.MeshStandardMaterial({ color: 0x141b23, roughness: 0.9 })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // --- The "product": a procedural desk lamp, built from primitives ---
+  const lamp = new THREE.Group();
+  scene.add(lamp);
+
+  const baseMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.85, roughness: 0.28 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.62, 0.14, 32), baseMat);
+  base.position.y = 0.07;
+  base.castShadow = true; base.receiveShadow = true;
+  lamp.add(base);
+
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 1.35, 20), baseMat);
+  pole.position.y = 0.14 + 0.675;
+  pole.castShadow = true;
+  lamp.add(pole);
+
+  const joint = new THREE.Mesh(new THREE.SphereGeometry(0.09, 20, 20), baseMat);
+  joint.position.y = pole.position.y + 0.675;
+  joint.castShadow = true;
+  lamp.add(joint);
+
+  // Shade geometries: swapped in/out by the configurator ("swap a part")
+  const shadeGeoms = {
+    dome: new THREE.SphereGeometry(0.42, 32, 20, 0, Math.PI * 2, 0, Math.PI * 0.55),
+    cone: new THREE.ConeGeometry(0.42, 0.5, 32, 1, true),
+    cylinder: new THREE.CylinderGeometry(0.36, 0.42, 0.46, 32, 1, true),
+  };
+  const shadeMat = new THREE.MeshStandardMaterial({
+    color: 0xd9a441, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide,
+  });
+  let shade = new THREE.Mesh(shadeGeoms.dome, shadeMat);
+  shade.position.y = joint.position.y + 0.28;
+  shade.castShadow = true;
+  lamp.add(shade);
+
+  const bulb = new THREE.Mesh(
+    new THREE.SphereGeometry(0.09, 16, 16),
+    new THREE.MeshStandardMaterial({ color: 0xfff2c4, emissive: 0xffdd88, emissiveIntensity: 1.1 })
+  );
+  bulb.position.y = shade.position.y - 0.06;
+  lamp.add(bulb);
+  const bulbLight = new THREE.PointLight(0xffdd99, 0.9, 3.2);
+  bulbLight.position.copy(bulb.position);
+  lamp.add(bulbLight);
+
+  // --- Configurator wiring ---------------------------------------------
+  const colors = [
+    ['Amber', 0xd9a441], ['Coral', 0xd15b4a], ['Sage', 0x5f8c6a],
+    ['Slate', 0x4c5a68], ['Ivory', 0xe9dfc9],
+  ];
+  const colorWrap = document.getElementById('colors');
+  colors.forEach(([name, hex], i) => {
+    const b = document.createElement('button');
+    b.className = 'swatch';
+    b.style.background = '#' + hex.toString(16).padStart(6, '0');
+    b.setAttribute('aria-label', name);
+    b.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
+    b.addEventListener('click', () => {
+      shadeMat.color.setHex(hex);
+      colorWrap.querySelectorAll('.swatch').forEach(s => s.setAttribute('aria-pressed', 'false'));
+      b.setAttribute('aria-pressed', 'true');
+    });
+    colorWrap.appendChild(b);
+  });
+
+  const shapeWrap = document.getElementById('shapes');
+  Object.keys(shadeGeoms).forEach((key2, i) => {
+    const b = document.createElement('button');
+    b.className = 'opt-btn';
+    b.textContent = key2[0].toUpperCase() + key2.slice(1);
+    b.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
+    b.addEventListener('click', () => {
+      shade.geometry.dispose();
+      shade.geometry = shadeGeoms[key2];
+      shapeWrap.querySelectorAll('.opt-btn').forEach(s => s.setAttribute('aria-pressed', 'false'));
+      b.setAttribute('aria-pressed', 'true');
+    });
+    shapeWrap.appendChild(b);
+  });
+
+  document.getElementById('metal-toggle').addEventListener('change', (e) => {
+    baseMat.metalness = e.target.checked ? 0.85 : 0.1;
+    baseMat.roughness = e.target.checked ? 0.28 : 0.75;
+  });
+
+  let autoRotate = true;
+  document.getElementById('rotate-toggle').addEventListener('change', (e) => { autoRotate = e.target.checked; });
+
+  document.getElementById('wire-toggle').addEventListener('change', (e) => {
+    [baseMat, shadeMat].forEach(m => { m.wireframe = e.target.checked; });
+  });
+
+  // --- Resize ---
+  function resize() {
+    const w = stage.clientWidth, h = stage.clientHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h, false);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // --- Pause fully when the tab is hidden: stop requesting frames, so
+  //     it costs nothing rather than just skipping a render call. --------
+  let running = true;
+  document.addEventListener('visibilitychange', () => {
+    running = !document.hidden;
+    if (running) { lastFrame = performance.now(); requestAnimationFrame(loop); }
+  });
+
+  // --- Lightweight FPS readout, satisfies "note its impact on frame rate"
+  let frames = 0, fpsWindowStart = performance.now(), lastFrame = performance.now();
+
+  function loop(now) {
+    if (!running) return;
+    const dt = (now - lastFrame) / 1000;
+    lastFrame = now;
+
+    if (autoRotate) lamp.rotation.y += dt * 0.35;
+    controls.update();
+    renderer.render(scene, camera);
+
+    frames++;
+    if (now - fpsWindowStart > 500) {
+      perfEl.textContent = Math.round((frames * 1000) / (now - fpsWindowStart)) + ' fps';
+      frames = 0;
+      fpsWindowStart = now;
+    }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
+
